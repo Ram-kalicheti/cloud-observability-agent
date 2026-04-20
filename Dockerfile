@@ -11,7 +11,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ .
 
-# non-root user — good practice, some cloud runtimes require it
 RUN useradd -m appuser && chown -R appuser /app
 USER appuser
 
