@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+
+      - name: set up python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('app/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: install dependencies
+        run: pip install -r app/requirements.txt pytest
+
+      - name: run tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AWS_REGION: us-east-1
+          DYNAMODB_TABLE: anomalies
+        run: pytest tests/ -v
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+
+      - name: build docker image
+        run: docker build -t cloud-observability-agent .
+
+      # /health returning 200 is enough to confirm the container wired up correctly
+      - name: smoke test container
+        run: |
+          docker run -d -p 8000:8000 \
+            -e OPENAI_API_KEY=test \
+            -e AWS_REGION=us-east-1 \
+            -e DYNAMODB_TABLE=anomalies \
+            --name agent cloud-observability-agent
+          sleep 5
+          curl --fail http://localhost:8000/health || (docker logs agent && exit 1)
+          docker stop agent
