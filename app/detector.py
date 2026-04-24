@@ -1,6 +1,6 @@
 import numpy as np
 from sklearn.ensemble import IsolationForest
-from datetime import datetime
+from datetime import datetime, UTC
 
 
 class AnomalyDetector:
@@ -27,8 +27,8 @@ class AnomalyDetector:
 
         # decision_function is negative for anomalies, flip it so higher = worse
         return {
-            "timestamp": log_entry.get("timestamp", datetime.utcnow().isoformat()),
-            "is_anomaly": prediction == -1,
+            "timestamp": log_entry.get("timestamp", datetime.now(UTC).isoformat()),
+            "is_anomaly": bool(prediction == -1),
             "severity_score": round(float(-score), 4),
             "log_entry": log_entry,
         }
