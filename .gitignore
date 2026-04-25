@@ -1,0 +1,8 @@
+*.zip
+layer/
+package/
+package-slim/
+test-log-event.json
+__pycache__/
+*.pyc
+.env
