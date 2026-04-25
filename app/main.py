@@ -4,8 +4,8 @@ import boto3
 import numpy as np
 from fastapi import FastAPI, WebSocket
 from dotenv import load_dotenv
-from detector import AnomalyDetector
-from explainer import AnomalyExplainer
+from app.detector import AnomalyDetector
+from app.explainer import AnomalyExplainer
 from datetime import datetime, timedelta
 
 load_dotenv()
