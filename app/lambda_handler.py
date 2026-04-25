@@ -3,50 +3,16 @@ import os
 import boto3
 import base64
 import gzip
-import numpy as np
 from datetime import datetime, UTC
 
-from app.detector import AnomalyDetector
-from app.explainer import AnomalyExplainer
+import urllib.request
+import urllib.error
 
-# reuse across warm invocations
-dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "us-east-1"))
-table = dynamodb.Table(os.environ.get("DYNAMODB_TABLE", "anomalies"))
-
-detector = AnomalyDetector(contamination=0.1)
-explainer = AnomalyExplainer()
-
-
-def _seed_training_data() -> list[dict]:
-    # synthetic baseline — swap once CloudWatch has enough real history
-    normal = []
-    for _ in range(200):
-        normal.append({
-            "error_count": int(np.random.normal(2, 1)),
-            "latency_ms": int(np.random.normal(120, 20)),
-            "memory_used_mb": int(np.random.normal(256, 30)),
-            "request_count": int(np.random.normal(100, 15)),
-        })
-    return normal
-
-
-def _save_anomaly(anomaly: dict, explanation: str) -> None:
-    table.put_item(Item={
-        "id": f"{anomaly['timestamp']}-{anomaly['severity_score']}",
-        "timestamp": anomaly["timestamp"],
-        "severity_score": str(anomaly["severity_score"]),  # DynamoDB doesn't store floats cleanly
-        "explanation": explanation,
-        "log_entry": json.dumps(anomaly["log_entry"]),
-        "cloud": anomaly["log_entry"].get("cloud", "aws"),
-    })
-
-
-# train once at cold start — stays in memory for warm invocations
-detector.train(_seed_training_data())
+# using urllib instead of requests — it's built into Python, no extra dependency needed
+FASTAPI_URL = os.environ.get("FASTAPI_URL", "http://localhost:8000")
 
 
 def handler(event, context):
-    # CloudWatch sends logs as base64-encoded gzipped JSON
     raw = event.get("awslogs", {}).get("data", "")
     if not raw:
         print("[handler] no log data in event")
@@ -56,7 +22,7 @@ def handler(event, context):
     log_events = decoded.get("logEvents", [])
     print(f"[handler] received {len(log_events)} log events")
 
-    saved = 0
+    processed = 0
     for log_event in log_events:
         try:
             message = json.loads(log_event["message"])
@@ -74,15 +40,28 @@ def handler(event, context):
             "cloud": "aws",
         }
 
-        result = detector.detect(log_entry)
+        try:
+            req = urllib.request.Request(
+                f"{FASTAPI_URL}/detect",
+                data=json.dumps(log_entry).encode(),
+                headers={
+        "Content-Type": "application/json",
+        "ngrok-skip-browser-warning": "true",  # bypass ngrok interstitial page
+    },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                result = json.loads(resp.read())
+                if result.get("is_anomaly"):
+                    print(f"[handler] anomaly detected — score {result.get('severity_score')}")
+        except urllib.error.URLError as e:
+            # log and continue — don't let one failed entry kill the whole batch
+            print(f"[handler] failed to call /detect: {e}")
+            continue
 
-        if result["is_anomaly"]:
-            explanation = explainer.explain(result)
-            _save_anomaly(result, explanation)
-            saved += 1
-            print(f"[handler] anomaly saved — score {result['severity_score']}")
+        processed += 1
 
     return {
         "statusCode": 200,
-        "body": json.dumps({"processed": len(log_events), "anomalies_saved": saved}),
+        "body": json.dumps({"received": len(log_events), "processed": processed}),
     }
