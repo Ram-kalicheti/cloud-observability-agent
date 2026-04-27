@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 import boto3
 import numpy as np
 from fastapi import FastAPI, WebSocket
@@ -15,15 +16,14 @@ app = FastAPI()
 detector = AnomalyDetector(contamination=0.1)
 explainer = AnomalyExplainer()
 
-# boto3 picks up credentials from env — no explicit key passing
 cw_client = boto3.client("logs", region_name=os.getenv("AWS_REGION", "us-east-1"))
 dynamodb = boto3.resource("dynamodb", region_name=os.getenv("AWS_REGION", "us-east-1"))
 table = dynamodb.Table(os.getenv("DYNAMODB_TABLE", "anomalies"))
 
+connected_clients: list[WebSocket] = []
+
 
 def fetch_cloudwatch_logs(log_group: str, minutes: int = 10) -> list[dict]:
-    # pull the last N minutes of logs — Lambda has a 15min max timeout so
-    # anything beyond that window needs a scheduled trigger instead
     end = datetime.utcnow()
     start = end - timedelta(minutes=minutes)
 
@@ -42,7 +42,6 @@ def fetch_cloudwatch_logs(log_group: str, minutes: int = 10) -> list[dict]:
             message["cloud"] = "aws"
             logs.append(message)
         except json.JSONDecodeError:
-            # skip malformed log lines rather than crashing the whole batch
             continue
 
     return logs
@@ -51,7 +50,7 @@ def fetch_cloudwatch_logs(log_group: str, minutes: int = 10) -> list[dict]:
 def save_anomaly(anomaly: dict, explanation: str) -> None:
     table.put_item(Item={
         "id": f"{anomaly['timestamp']}-{anomaly['severity_score']}",
-        "timestamp": anomaly["timestamp"],
+        "timestamp": str(anomaly["timestamp"]),
         "severity_score": str(anomaly["severity_score"]),
         "explanation": explanation,
         "log_entry": json.dumps(anomaly["log_entry"]),
@@ -60,8 +59,7 @@ def save_anomaly(anomaly: dict, explanation: str) -> None:
 
 
 def seed_training_data() -> list[dict]:
-    # synthetic baseline — replace with real historical logs once you
-    # have enough data in CloudWatch (aim for 200+ entries minimum)
+    # swap this out once CloudWatch has 200+ real entries
     normal = []
     for _ in range(200):
         normal.append({
@@ -86,31 +84,45 @@ def health():
 
 
 @app.post("/detect")
-def detect(log_entry: dict):
+async def detect(log_entry: dict):
     result = detector.detect(log_entry)
 
     if result["is_anomaly"]:
         explanation = explainer.explain(result)
         save_anomaly(result, explanation)
-        return {**result, "explanation": explanation}
+        payload = {**result, "explanation": explanation}
+
+        for client in connected_clients.copy():
+            try:
+                await client.send_json(payload)
+            except Exception:
+                connected_clients.remove(client)
+
+        return payload
 
     return result
 
 
 @app.websocket("/ws/logs")
 async def websocket_logs(websocket: WebSocket):
-    # live feed for the React dashboard — pushes anomalies as they're detected
     await websocket.accept()
-    log_group = os.getenv("CW_LOG_GROUP", "/aws/lambda/my-function")
+    connected_clients.append(websocket)
+    log_group = os.getenv("CW_LOG_GROUP", "/cloud-observability-agent/logs")
 
     try:
         while True:
-            logs = fetch_cloudwatch_logs(log_group, minutes=1)
-            for entry in logs:
-                result = detector.detect(entry)
-                if result["is_anomaly"]:
-                    explanation = explainer.explain(result)
-                    await websocket.send_json({**result, "explanation": explanation})
+            try:
+                logs = fetch_cloudwatch_logs(log_group, minutes=1)
+                for entry in logs:
+                    result = detector.detect(entry)
+                    if result["is_anomaly"]:
+                        explanation = explainer.explain(result)
+                        await websocket.send_json({**result, "explanation": explanation})
+            except Exception as e:
+                print(f"[ws] fetch error: {e}")
+
+            # 5 TPS limit on filter_log_events
+            await asyncio.sleep(10)
     except Exception:
-        # client disconnected — clean exit, no need to re-raise
+        connected_clients.remove(websocket)
         await websocket.close()
