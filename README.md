@@ -6,39 +6,7 @@ An autonomous log anomaly detection system that monitors cloud infrastructure in
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    subgraph AWS
-        CW[CloudWatch Logs] --> Lambda[Lambda Function]
-    end
-
-    subgraph Azure
-        AF[Azure Function] --> ngrok[ngrok tunnel]
-    end
-
-    subgraph Core ["FastAPI Core (Local)"]
-        API[POST /detect]
-        ISO[Isolation Forest\nAnomaly Detector]
-        OAI[OpenAI GPT-3.5\nIncident Explainer]
-        WS[WebSocket /ws/logs]
-        API --> ISO --> OAI --> WS
-    end
-
-    subgraph Storage
-        DDB[(DynamoDB\nanomalies)]
-        CDB[(Cosmos DB\nanomalies)]
-    end
-
-    subgraph Frontend
-        DASH[React TypeScript\nLive Dashboard]
-    end
-
-    Lambda --> API
-    ngrok --> API
-    OAI --> DDB
-    OAI --> CDB
-    WS --> DASH
-```
+![Architecture](docs/architecture.png)
 
 ---
 
@@ -73,23 +41,37 @@ flowchart LR
 ### Live Anomaly Dashboard
 ![React Dashboard](docs/screenshots/01-react-dashboard.png)
 
-### DynamoDB — Anomaly Record
-![DynamoDB](docs/screenshots/02-dynamodb.png)
+---
 
-### CloudWatch — Log Stream
+### Compute — Lambda vs Azure Functions
+
+| AWS Lambda | Azure Functions |
+|:---:|:---:|
+| ![Lambda](docs/screenshots/04-lambda.png) | ![Azure Function](docs/screenshots/05-azure-function.png) |
+| Invocation metrics, 473ms duration, 0 errors | HTTP trigger invocation logs |
+
+---
+
+### Storage — DynamoDB vs Cosmos DB
+
+| Amazon DynamoDB | Azure Cosmos DB |
+|:---:|:---:|
+| ![DynamoDB](docs/screenshots/02-dynamodb.png) | ![Cosmos DB](docs/screenshots/06-cosmos-db.png) |
+| Anomaly record with OpenAI explanation | Mirrored anomaly record in Azure |
+
+---
+
+### Observability — CloudWatch Logs
+
 ![CloudWatch](docs/screenshots/03-cloudwatch.png)
 
-### Lambda — Invocation Metrics
-![Lambda](docs/screenshots/04-lambda.png)
+---
 
-### Azure Function — Invocation Logs
-![Azure Function](docs/screenshots/05-azure-function.png)
+### CI Pipeline — GitHub Actions
 
-### Cosmos DB — Anomaly Record
-![Cosmos DB](docs/screenshots/06-cosmos-db.png)
-
-### GitHub Actions — CI Pipeline
 ![CI Green](docs/screenshots/07-github-actions.png)
+
+All jobs passing — lint, pytest, Docker build ✅
 
 ---
 
