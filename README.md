@@ -150,7 +150,7 @@ cloud-observability-agent/
 │   └── test_detector.py
 ├── .github/workflows/
 │   └── ci.yml
-├── docs/screenshots/        # Evidence screenshots
+├── docs/screenshots/        # screenshots
 └── Dockerfile
 ```
 
